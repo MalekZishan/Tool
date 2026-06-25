@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SleekMail - Real-time Email Verification Tool</title>
+    <meta name="description" content="Verify email address existence, domain records, disposable providers, and deliverability status instantly with our secure verification utility.">
+    <!-- Google Fonts for premium typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <!-- SheetJS CDN for parsing and exporting Excel/CSV files in client-side -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+    <div class="background-glow">
+        <div class="glow-orb orb-1"></div>
+        <div class="glow-orb orb-2"></div>
+    </div>
+    
+    <div class="app-container">
+        <header class="app-header">
+            <div class="logo">
+                <span class="logo-icon">✦</span>
+                <span class="logo-text">SleekMail</span>
+            </div>
+        </header>
+
+        <main class="app-main">
+            <section class="verifier-card">
+                <!-- Navigation Tabs -->
+                <div class="tab-navigation">
+                    <button class="tab-btn active" data-tab="single-panel">
+                        <span class="tab-icon">👤</span> Single Verification
+                    </button>
+                    <button class="tab-btn" data-tab="bulk-panel">
+                        <span class="tab-icon">📂</span> Bulk Verification
+                    </button>
+                </div>
+
+                <!-- Single Verification Tab -->
+                <div id="single-panel" class="tab-panel active">
+                    <div class="card-header">
+                        <h1>Verify Email Address</h1>
+                        <p class="subtitle">Check if an email address is valid, active, and safe to contact in real time.</p>
+                    </div>
+
+                    <form id="verifier-form" class="verifier-form" onsubmit="return false;">
+                        <div class="input-group">
+                            <label for="email-input" class="sr-only">Email Address</label>
+                            <input 
+                                type="text" 
+                                id="email-input" 
+                                placeholder="Enter email address (e.g. malekzishan1121212110@gmail.com)" 
+                                autocomplete="off" 
+                                required
+                            >
+                            <button type="submit" id="verify-btn" class="verify-btn">
+                                <span id="btn-text">Verify Status</span>
+                                <span id="btn-spinner" class="spinner hidden"></span>
+                            </button>
+                        </div>
+                    </form>
+
+                    <div id="result-container" class="result-container hidden">
+                        <!-- Results Card will be dynamically injected here -->
+                    </div>
+                </div>
+
+                <!-- Bulk Verification Tab -->
+                <div id="bulk-panel" class="tab-panel">
+                    <div class="card-header">
+                        <h1>Bulk Email Verification</h1>
+                        <p class="subtitle">Upload an Excel (.xlsx, .xls) or CSV (.csv) file to verify lists of emails instantly.</p>
+                    </div>
+
+                    <!-- Drag and Drop Zone -->
+                    <div id="dropzone" class="dropzone">
+                        <div class="dropzone-content">
+                            <span class="upload-icon">📤</span>
+                            <h3>Drag & drop your file here</h3>
+                            <p class="dropzone-subtext">or click to browse from your computer</p>
+                            <span class="file-limit">Supports .xlsx, .xls, .csv</span>
+                        </div>
+                        <input type="file" id="file-input" accept=".xlsx,.xls,.csv" class="hidden-input">
+                    </div>
+
+                    <!-- Column Mapping Panel -->
+                    <div id="mapping-panel" class="mapping-panel hidden">
+                        <div class="file-details-bar">
+                            <div class="file-info-group">
+                                <span class="file-bar-icon">📄</span>
+                                <div class="file-meta">
+                                    <span id="file-name" class="file-name-text">-</span>
+                                    <span id="file-size" class="file-size-text">-</span>
+                                </div>
+                            </div>
+                            <button id="reset-file-btn" class="reset-file-btn">Change File</button>
+                        </div>
+
+                        <div class="mapping-selectors">
+                            <div class="selector-group" id="sheet-selector-group">
+                                <label for="sheet-select">Select Worksheet</label>
+                                <div class="select-wrapper">
+                                    <select id="sheet-select" class="custom-select"></select>
+                                </div>
+                            </div>
+                            <div class="selector-group">
+                                <label for="column-select">Select Email Column</label>
+                                <div class="select-wrapper">
+                                    <select id="column-select" class="custom-select"></select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="preview-section">
+                            <div class="preview-header">File Preview (first 5 rows)</div>
+                            <div class="table-wrapper">
+                                <table id="preview-table" class="data-table"></table>
+                            </div>
+                        </div>
+
+                        <button id="start-btn" class="start-btn">Start Verification</button>
+                    </div>
+
+                    <!-- Progress and Results Panel -->
+                    <div id="progress-panel" class="progress-panel hidden">
+                        <!-- Progress Cards Grid -->
+                        <div class="progress-stats-grid">
+                            <div class="stat-box count-valid-box">
+                                <span class="stat-count" id="count-valid">0</span>
+                                <span class="stat-label">Valid Emails</span>
+                            </div>
+                            <div class="stat-box count-invalid-box">
+                                <span class="stat-count" id="count-invalid">0</span>
+                                <span class="stat-label">Invalid Emails</span>
+                            </div>
+                            <div class="stat-box count-unknown-box">
+                                <span class="stat-count" id="count-unknown">0</span>
+                                <span class="stat-label">Unverifiable</span>
+                            </div>
+                            <div class="stat-box count-total-box">
+                                <span class="stat-count" id="count-total">0</span>
+                                <span class="stat-label">Total Emails</span>
+                            </div>
+                        </div>
+
+                        <!-- Progress Bar -->
+                        <div class="progress-bar-container">
+                            <div class="progress-bar-info">
+                                <span id="progress-text">Processing: 0 / 0 (0%)</span>
+                                <span id="progress-rate">-</span>
+                            </div>
+                            <div class="progress-bar-bg">
+                                <div id="progress-bar-fill" class="progress-bar-fill"></div>
+                            </div>
+                        </div>
+
+                        <!-- Process Controls -->
+                        <div class="progress-controls">
+                            <button id="pause-btn" class="control-btn pause-btn">Pause</button>
+                            <button id="cancel-btn" class="control-btn cancel-btn">Cancel</button>
+                            <button id="download-btn" class="control-btn download-btn hidden">
+                                <span>📥</span> Download Excel Report
+                            </button>
+                            <button id="clear-bulk-btn" class="control-btn clear-btn hidden">Verify Another File</button>
+                        </div>
+
+                        <!-- Live Table List -->
+                        <div class="live-results-section">
+                            <div class="preview-header">Live Verification Results</div>
+                            <div class="table-wrapper live-table-wrapper">
+                                <table id="results-table" class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Row</th>
+                                            <th>Email Address</th>
+                                            <th>Status</th>
+                                            <th>Details</th>
+                                            <th>Mailbox</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="results-tbody">
+                                        <!-- Dynamically populated rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="app-footer">
+            <p>&copy; 2026 SleekMail Verification Services. All rights reserved.</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
