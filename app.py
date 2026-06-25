@@ -1,4 +1,5 @@
 import re
+import time
 import socket
 import smtplib
 import logging
@@ -159,24 +160,40 @@ def check_major_provider_playwright(email, domain):
                 page.locator("li[role='option']:has-text('Male')").first.click()
                 page.wait_for_timeout(500)
                 
-                # Click Next
+                # Click Next on birthday page
                 page.locator("button:has-text('Next')").first.click()
                 
-                # Step 3: Username Page
-                page.wait_for_timeout(4000)
+                # Step 3: Username Page - dynamically wait for elements to load
+                try:
+                    page.wait_for_selector("input[name='Username'], input[name='usernameRadio']", timeout=6000)
+                except Exception:
+                    pass
                 
                 # Check if suggestions radio buttons exist, select "custom" if present
                 custom_radio = page.locator("input[name='usernameRadio'][value='custom']")
                 if custom_radio.count() > 0:
                     custom_radio.click()
-                    page.wait_for_timeout(500)
+                    try:
+                        # Wait up to 2 seconds for custom username text field to enable/show
+                        page.wait_for_selector("input[name='Username']:not([disabled])", timeout=2000)
+                    except Exception:
+                        page.wait_for_timeout(500)
                 
-                page.wait_for_selector("input[name='Username']", timeout=15000)
+                page.wait_for_selector("input[name='Username']", timeout=10000)
                 page.fill("input[name='Username']", username)
                 
                 # Click Next to submit username
                 page.locator("button:has-text('Next')").first.click()
-                page.wait_for_timeout(4000)
+                
+                # Dynamically wait for URL change or error text to render (up to 4.5 seconds)
+                start_wait = time.time()
+                while time.time() - start_wait < 4.5:
+                    if "signup/password" in page.url:
+                        break
+                    body_text = page.locator("body").text_content()
+                    if "taken" in body_text.lower() or "choose another" in body_text.lower() or "try another" in body_text.lower():
+                        break
+                    page.wait_for_timeout(200)
                 
                 url = page.url
                 body_text = page.locator("body").text_content()
