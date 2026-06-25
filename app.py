@@ -3,10 +3,23 @@ import time
 import socket
 import smtplib
 import logging
+import threading
 import dns.resolver
 from flask import Flask, request, jsonify, render_template
 from playwright.sync_api import sync_playwright
 from playwright_stealth import stealth_sync
+
+# Thread-local storage to cache Playwright browser instances per request thread
+thread_local = threading.local()
+
+def get_thread_browser():
+    """Initializes and caches a Playwright browser instance on the current thread."""
+    if not hasattr(thread_local, "playwright"):
+        logger.info(f"[{threading.current_thread().name}] Starting thread-local Playwright and WebKit browser...")
+        thread_local.playwright = sync_playwright().start()
+        thread_local.browser = thread_local.playwright.webkit.launch(headless=True)
+    return thread_local.browser
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -119,135 +132,153 @@ def is_major_provider(domain, mx_hosts):
     return False
 
 def check_major_provider_playwright(email, domain):
-    """Uses Playwright headless browser to verify account existence on major sign-in interfaces."""
+    """Uses cached Playwright browser instances to verify account existence in 2-3 seconds dynamically."""
+    context = None
     try:
-        logger.info(f"Attempting Playwright fallback check for {email}")
-        with sync_playwright() as p:
-            browser = p.webkit.launch(headless=True)
-            context = browser.new_context(
-                viewport={"width": 1280, "height": 800},
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            page = context.new_page()
+        logger.info(f"Attempting thread-local cached Playwright check for {email}")
+        browser = get_thread_browser()
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+        )
+        page = context.new_page()
 
-            domain_lower = domain.lower()
-            if domain_lower in ("gmail.com", "googlemail.com"):
-                username = email.split('@')[0]
-                logger.info(f"Attempting Google Signup flow validation for username: {username}")
-                page.goto("https://accounts.google.com/signup", timeout=20000)
-                page.wait_for_load_state("domcontentloaded")
-                
-                # Step 1: Name Page
-                page.wait_for_selector("input[name='firstName']", timeout=10000)
-                page.fill("input[name='firstName']", "Zishan")
-                page.fill("input[name='lastName']", "Malek")
-                page.locator("button:has-text('Next')").first.click()
-                
-                # Step 2: Birthday/Gender Page
-                page.wait_for_selector("input#day", timeout=15000)
-                page.fill("input#day", "15")
-                page.fill("input#year", "1995")
-                
-                # Select Month
-                page.locator("div.VfPpkd-TkwUic").first.click()
-                page.wait_for_timeout(500)
-                page.locator("li[role='option']:has-text('January')").click()
-                page.wait_for_timeout(500)
-                
-                # Select Gender
-                page.locator("div.VfPpkd-TkwUic").nth(1).click()
-                page.wait_for_timeout(500)
-                page.locator("li[role='option']:has-text('Male')").first.click()
-                page.wait_for_timeout(500)
-                
-                # Click Next on birthday page
-                page.locator("button:has-text('Next')").first.click()
-                
-                # Step 3: Username Page - dynamically wait for elements to load
+        domain_lower = domain.lower()
+        if domain_lower in ("gmail.com", "googlemail.com"):
+            username = email.split('@')[0]
+            logger.info(f"Attempting Google Signup flow validation for username: {username}")
+            page.goto("https://accounts.google.com/signup", timeout=20000)
+            page.wait_for_load_state("domcontentloaded")
+            
+            # Step 1: Name Page
+            page.wait_for_selector("input[name='firstName']", timeout=10000)
+            page.fill("input[name='firstName']", "Zishan")
+            page.fill("input[name='lastName']", "Malek")
+            page.locator("button:has-text('Next')").first.click()
+            
+            # Step 2: Birthday/Gender Page
+            page.wait_for_selector("input#day", timeout=15000)
+            page.fill("input#day", "15")
+            page.fill("input#year", "1995")
+            
+            # Select Month (Playwright auto-waits for elements to be actionable)
+            page.locator("div.VfPpkd-TkwUic").first.click()
+            page.locator("li[role='option']:has-text('January')").click()
+            
+            # Select Gender
+            page.locator("div.VfPpkd-TkwUic").nth(1).click()
+            page.locator("li[role='option']:has-text('Male')").first.click()
+            
+            # Click Next on birthday page
+            page.locator("button:has-text('Next')").first.click()
+            
+            # Step 3: Username Page - dynamically wait for elements to load
+            try:
+                page.wait_for_selector("input[name='Username'], input[name='usernameRadio']", timeout=6000)
+            except Exception:
+                pass
+            
+            # Check if suggestions radio buttons exist, select "custom" if present
+            custom_radio = page.locator("input[name='usernameRadio'][value='custom']")
+            if custom_radio.count() > 0:
+                custom_radio.click()
                 try:
-                    page.wait_for_selector("input[name='Username'], input[name='usernameRadio']", timeout=6000)
+                    # Wait up to 2 seconds for custom username text field to enable/show
+                    page.wait_for_selector("input[name='Username']:not([disabled])", timeout=2000)
                 except Exception:
                     pass
-                
-                # Check if suggestions radio buttons exist, select "custom" if present
-                custom_radio = page.locator("input[name='usernameRadio'][value='custom']")
-                if custom_radio.count() > 0:
-                    custom_radio.click()
-                    try:
-                        # Wait up to 2 seconds for custom username text field to enable/show
-                        page.wait_for_selector("input[name='Username']:not([disabled])", timeout=2000)
-                    except Exception:
-                        page.wait_for_timeout(500)
-                
-                page.wait_for_selector("input[name='Username']", timeout=10000)
-                page.fill("input[name='Username']", username)
-                
-                # Click Next to submit username
-                page.locator("button:has-text('Next')").first.click()
-                
-                # Dynamically wait for URL change or error text to render (up to 4.5 seconds)
-                start_wait = time.time()
-                while time.time() - start_wait < 4.5:
-                    if "signup/password" in page.url:
-                        break
-                    body_text = page.locator("body").text_content()
-                    if "taken" in body_text.lower() or "choose another" in body_text.lower() or "try another" in body_text.lower():
-                        break
-                    page.wait_for_timeout(200)
-                
-                url = page.url
+            
+            page.wait_for_selector("input[name='Username']", timeout=10000)
+            page.fill("input[name='Username']", username)
+            
+            # Click Next to submit username
+            page.locator("button:has-text('Next')").first.click()
+            
+            # Dynamically wait for URL change or error text to render (up to 4.5 seconds)
+            start_wait = time.time()
+            while time.time() - start_wait < 4.5:
+                if "signup/password" in page.url:
+                    break
                 body_text = page.locator("body").text_content()
-                
-                if "signup/password" in url:
-                    # Proceeded to password step, meaning the username is available (email does not exist)
-                    return "invalid", "Email doesn't exist", False
-                elif "signup/username" in url:
-                    # Remained on username step, check if it's taken
-                    if "taken" in body_text.lower() or "choose another" in body_text.lower() or "try another" in body_text.lower():
-                        return "valid", "Email exists", True
-                    else:
-                        return "unknown", "Mailbox could not be verified", False
-                else:
-                    return "unknown", "Mailbox could not be verified", False
-
-
-            elif "yahoo" in domain_lower or domain_lower in ("aol.com", "yahoo.com"):
-                page.goto("https://login.yahoo.com/", timeout=15000)
-                page.wait_for_load_state("domcontentloaded")
-                page.wait_for_selector("#login-username", timeout=15000)
-                page.fill("#login-username", email)
-                page.click("#login-signin")
-                page.wait_for_timeout(2500)
-                content = page.content()
-                
-                if "we don't recognize this email" in content or "don't recognize this" in content or "Invalid username" in content:
-                    return "invalid", "Email doesn't exist", False
-                elif "password" in content or page.locator("input[type='password']").count() > 0 or page.locator("#login-passwd").count() > 0:
+                if "taken" in body_text.lower() or "choose another" in body_text.lower() or "try another" in body_text.lower():
+                    break
+                page.wait_for_timeout(100)
+            
+            url = page.url
+            body_text = page.locator("body").text_content()
+            
+            if "signup/password" in url:
+                # Proceeded to password step, meaning the username is available (email does not exist)
+                return "invalid", "Email doesn't exist", False
+            elif "signup/username" in url:
+                # Remained on username step, check if it's taken
+                if "taken" in body_text.lower() or "choose another" in body_text.lower() or "try another" in body_text.lower():
                     return "valid", "Email exists", True
                 else:
                     return "unknown", "Mailbox could not be verified", False
+            else:
+                return "unknown", "Mailbox could not be verified", False
 
-            elif domain_lower in ("outlook.com", "hotmail.com", "live.com", "msn.com"):
-                page.goto("https://login.live.com/", timeout=15000)
-                page.wait_for_load_state("domcontentloaded")
-                page.wait_for_selector("input[name='loginfmt']", timeout=15000)
-                page.fill("input[name='loginfmt']", email)
-                page.click("input[type='submit']")
-                page.wait_for_timeout(2500)
+        elif "yahoo" in domain_lower or domain_lower in ("aol.com", "yahoo.com"):
+            page.goto("https://login.yahoo.com/", timeout=15000)
+            page.wait_for_load_state("domcontentloaded")
+            
+            username_sel = "input[name='username'], input#login-username"
+            page.wait_for_selector(username_sel, timeout=10000)
+            page.fill(username_sel, email)
+            
+            next_sel = "button[name='signin'], #login-signin"
+            page.wait_for_selector(next_sel, timeout=10000)
+            page.click(next_sel)
+            
+            # Dynamic check up to 4.0 seconds
+            start_wait = time.time()
+            while time.time() - start_wait < 4.0:
                 content = page.content()
-                
-                if "Microsoft account doesn't exist" in content or "doesn't exist" in content:
-                    return "invalid", "Email doesn't exist", False
-                elif "password" in content or page.locator("input[type='password']").count() > 0 or page.locator("input[name='passwd']").count() > 0:
+                if "passwd" in content or "password" in content.lower() or page.locator("input[type='password']").count() > 0 or page.locator("#login-passwd").count() > 0:
                     return "valid", "Email exists", True
-                else:
-                    return "unknown", "Mailbox could not be verified", False
-
+                if "don't recognize" in content.lower() or "don't recognise" in content.lower() or "invalid username" in content.lower():
+                    return "invalid", "Email doesn't exist", False
+                page.wait_for_timeout(100)
+                
             return "unknown", "Mailbox could not be verified", False
+
+        elif domain_lower in ("outlook.com", "hotmail.com", "live.com", "msn.com"):
+            page.goto("https://login.live.com/", timeout=15000)
+            page.wait_for_load_state("domcontentloaded")
+            
+            username_sel = "#usernameEntry, input[name='loginfmt']"
+            page.wait_for_selector(username_sel, timeout=10000)
+            page.fill(username_sel, email)
+            
+            next_sel = "button:has-text('Next'), input[type='submit'], button[type='submit'], #idSIButton9"
+            page.wait_for_selector(next_sel, timeout=10000)
+            page.click(next_sel)
+            
+            # Dynamic check up to 4.0 seconds
+            start_wait = time.time()
+            while time.time() - start_wait < 4.0:
+                content = page.content()
+                url = page.url
+                if "password" in url.lower() or "passwd" in content or page.locator("input[type='password']").count() > 0:
+                    return "valid", "Email exists", True
+                if "couldn't find a microsoft account" in content.lower() or "doesn't exist" in content.lower():
+                    return "invalid", "Email doesn't exist", False
+                page.wait_for_timeout(100)
+                
+            return "unknown", "Mailbox could not be verified", False
+
+        return "unknown", "Mailbox could not be verified", False
 
     except Exception as e:
         logger.error(f"Playwright validation failed for {email}: {e}")
         return "unknown", "Mailbox could not be verified", False
+    finally:
+        if context:
+            try:
+                context.close()
+            except Exception:
+                pass
 
 @app.route('/api/verify', methods=['GET'])
 def verify_email():
