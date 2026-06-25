@@ -347,5 +347,9 @@ def home():
     return render_template('index.html')
 
 if __name__ == '__main__':
-    # TODO(security): Run only on 127.0.0.1 for local development
-    app.run(host='127.0.0.1', port=5000, debug=True)
+    import os
+    # Default to 127.0.0.1 for local dev, but allow overriding (e.g. 0.0.0.0 for Docker/Render)
+    host = os.environ.get("FLASK_RUN_HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", 5000))
+    debug_mode = os.environ.get("FLASK_DEBUG", "True").lower() in ("true", "1", "yes")
+    app.run(host=host, port=port, debug=debug_mode)
